@@ -11,10 +11,7 @@ import type {
   TCarouselProps,
   WithTimingAnimation,
 } from "../types";
-import {
-  computedRealIndexWithAutoFillData,
-  convertToSharedIndex,
-} from "../utils/computed-with-auto-fill-data";
+import { convertToSharedIndex } from "../utils/computed-with-auto-fill-data";
 import { dealWithAnimation } from "../utils/deal-with-animation";
 import { handlerOffsetDirection } from "../utils/handleroffset-direction";
 import { round } from "../utils/log";
@@ -80,6 +77,7 @@ export function useCarouselController(options: IOpts): ICarouselController {
   const sharedPreIndex = useRef<number>(defaultIndex);
 
   const currentFixedPage = React.useCallback(() => {
+    "worklet";
     if (size <= 0) return 0;
     if (loop) return -Math.round(handlerOffset.value / size);
 
@@ -92,9 +90,23 @@ export function useCarouselController(options: IOpts): ICarouselController {
     return clamped;
   }, [handlerOffset, dataInfo, size, loop]);
 
-  function setSharedIndex(newSharedIndex: number) {
+  const setSharedIndex = React.useCallback((newSharedIndex: number) => {
     sharedIndex.current = newSharedIndex;
-  }
+  }, []);
+
+  // Helper to compute and update sharedIndex from a raw index
+  const updateSharedIndexFromRaw = React.useCallback(
+    (rawIndex: number) => {
+      const newSharedIndex = convertToSharedIndex({
+        loop,
+        rawDataLength: dataInfo.originalLength,
+        autoFillData: autoFillData!,
+        index: rawIndex,
+      });
+      scheduleOnRN(setSharedIndex, newSharedIndex);
+    },
+    [loop, dataInfo.originalLength, autoFillData, setSharedIndex]
+  );
 
   useAnimatedReaction(
     () => {
@@ -130,17 +142,13 @@ export function useCarouselController(options: IOpts): ICarouselController {
   );
 
   const getCurrentIndex = React.useCallback(() => {
-    const realIndex = computedRealIndexWithAutoFillData({
-      index: index.value,
-      dataLength: dataInfo.originalLength,
-      loop,
-      autoFillData: autoFillData!,
-    });
-
-    return realIndex;
-  }, [index, autoFillData, dataInfo, loop]);
+    // Return the shared index which is already computed and tracked in React state
+    // via useAnimatedReaction + scheduleOnRN, avoiding direct .value access
+    return sharedIndex.current;
+  }, []);
 
   const canSliding = React.useCallback(() => {
+    "worklet";
     const currentSize = resolvedSize.value ?? size;
     const ready = sizePhase.value === "ready" && !!currentSize;
 
@@ -281,16 +289,17 @@ export function useCarouselController(options: IOpts): ICarouselController {
         }
       }
 
-      onScrollStart?.();
+      onScrollStart && scheduleOnRN(onScrollStart);
 
       const nextPage = currentFixedPage() + count;
       index.value = nextPage;
+      updateSharedIndexFromRaw(nextPage);
 
       if (animated) {
         handlerOffset.value = scrollWithTiming(-nextPage * size, onFinished) as any;
       } else {
         handlerOffset.value = -nextPage * size;
-        onFinished?.();
+        onFinished && scheduleOnRN(onFinished);
       }
     },
     [
@@ -309,26 +318,29 @@ export function useCarouselController(options: IOpts): ICarouselController {
       flattenedStyle,
       width,
       height,
+      updateSharedIndexFromRaw,
     ]
   );
 
   const prev = React.useCallback(
     (opts: TCarouselActionOptions = {}) => {
+      "worklet";
       const { count = 1, animated = true, onFinished } = opts;
       if (!canSliding()) return;
 
       if (!loop && index.value <= 0) return;
 
-      onScrollStart?.();
+      onScrollStart && scheduleOnRN(onScrollStart);
 
       const prevPage = currentFixedPage() - count;
       index.value = prevPage;
+      updateSharedIndexFromRaw(prevPage);
 
       if (animated) {
         handlerOffset.value = scrollWithTiming(-prevPage * size, onFinished);
       } else {
         handlerOffset.value = -prevPage * size;
-        onFinished?.();
+        onFinished && scheduleOnRN(onFinished);
       }
     },
     [
@@ -340,18 +352,20 @@ export function useCarouselController(options: IOpts): ICarouselController {
       size,
       scrollWithTiming,
       currentFixedPage,
+      updateSharedIndexFromRaw,
     ]
   );
 
   const to = React.useCallback(
     (opts: { i: number; animated: boolean; onFinished?: () => void }) => {
+      "worklet";
       const { i, animated = false, onFinished } = opts;
 
       if (i === index.value) return;
 
       if (!canSliding()) return;
 
-      onScrollStart?.();
+      onScrollStart && scheduleOnRN(onScrollStart);
       // direction -> 1 | -1
       let direction: -1 | 1;
       if (fixedDirection === "positive") direction = 1;
@@ -382,11 +396,13 @@ export function useCarouselController(options: IOpts): ICarouselController {
 
       if (animated) {
         index.value = i;
+        updateSharedIndexFromRaw(i);
         handlerOffset.value = scrollWithTiming(finalOffset, onFinished);
       } else {
         handlerOffset.value = finalOffset;
         index.value = i;
-        onFinished?.();
+        updateSharedIndexFromRaw(i);
+        onFinished && scheduleOnRN(onFinished);
       }
     },
     [
@@ -399,11 +415,13 @@ export function useCarouselController(options: IOpts): ICarouselController {
       canSliding,
       onScrollStart,
       scrollWithTiming,
+      updateSharedIndexFromRaw,
     ]
   );
 
   const scrollTo = React.useCallback(
     (opts: TCarouselActionOptions = {}) => {
+      "worklet";
       const { index: i, count, animated = false, onFinished } = opts;
 
       if (typeof i === "number" && i > -1) {
